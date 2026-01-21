@@ -350,4 +350,17 @@ async function connectToWhatsApp() {
     });
 }
 
+// --- FITUR WAJIB: DUMMY SERVER UNTUK RENDER ---
+const http = require('http');
+const port = process.env.PORT || 10000;
+
+const server = http.createServer((req, res) => {
+    res.writeHead(200);
+    res.end('Bot WhatsApp MaknaFlow Aktif & Sehat! 🚀');
+});
+
+server.listen(port, '0.0.0.0', () => {
+    console.log(`✅ Server dummy berjalan di port ${port}`);
+});
+
 connectToWhatsApp();
