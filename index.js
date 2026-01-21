@@ -54,6 +54,14 @@ async function fetchMasterData() {
 
 // --- FUNGSI UTAMA BOT ---
 async function connectToWhatsApp() {
+    // --- KODE PEMBERSIH (WAJIB ADA) ---
+    const authPath = './auth_baileys';
+    // Hapus folder sesi setiap kali bot nyala ulang
+    if (fs.existsSync(authPath)) {
+        fs.rmSync(authPath, { recursive: true, force: true });
+        console.log('🗑️ Sesi lama dihapus agar login fresh!');
+    }
+    
     const { state, saveCreds } = await useMultiFileAuthState(SESSION_DIR);
 
     const sock = makeWASocket({
