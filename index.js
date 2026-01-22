@@ -68,7 +68,7 @@ async function connectToWhatsApp() {
         auth: state,
         printQRInTerminal: !usePairingCode,
         logger: pino({ level: 'silent' }),
-        browser: ['MaknaFlow Bot', 'Chrome', '1.0.0'],
+        browser: ["Mac OS", "Chrome", "10.15.7"],
         connectTimeoutMs: 60000,
         keepAliveIntervalMs: 10000,
         emitOwnEvents: true,
