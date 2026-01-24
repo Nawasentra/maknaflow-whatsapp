@@ -10,7 +10,7 @@ const BASE_URL = 'https://maknaflow-staging.onrender.com/api';
 const SESSION_DIR = 'auth_baileys'; 
 const CONTACTS_FILE = 'contacts_mapping.json'; // File database manual kita
 // Tambahan QR dijadikan kode
-const usePairingCode = true; // Ubah jadi false jika ingin balik ke QR
+const usePairingCode = false; // Ubah jadi false jika ingin balik ke QR
 const nomorBot = '628211019477'; // NOMOR BOT WHATSAPP ANDA
 
 // State Management
@@ -55,20 +55,20 @@ async function fetchMasterData() {
 // --- FUNGSI UTAMA BOT ---
 async function connectToWhatsApp() {
     // --- KODE PEMBERSIH (WAJIB ADA) ---
-    const authPath = './auth_baileys';
-    // Hapus folder sesi setiap kali bot nyala ulang
-    if (fs.existsSync(authPath)) {
-        fs.rmSync(authPath, { recursive: true, force: true });
-        console.log('🗑️ Sesi lama dihapus agar login fresh!');
-    }
+    // const authPath = './auth_baileys';
+    // // Hapus folder sesi setiap kali bot nyala ulang
+    // if (fs.existsSync(authPath)) {
+    //     fs.rmSync(authPath, { recursive: true, force: true });
+    //     console.log('🗑️ Sesi lama dihapus agar login fresh!');
+    // }
     
     const { state, saveCreds } = await useMultiFileAuthState(SESSION_DIR);
 
     const sock = makeWASocket({
         auth: state,
-        printQRInTerminal: !usePairingCode,
+        printQRInTerminal: true,
         logger: pino({ level: 'silent' }),
-        browser: ["Mac OS", "Chrome", "10.15.7"],
+        browser: ["Ubuntu", "Chrome", "20.0.04"],
         connectTimeoutMs: 60000,
         keepAliveIntervalMs: 10000,
         emitOwnEvents: true,
