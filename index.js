@@ -3,372 +3,405 @@ const { Boom } = require('@hapi/boom');
 const qrcode = require('qrcode-terminal');
 const pino = require('pino');
 const axios = require('axios');
-const fs = require('fs');
 
-// --- KONFIGURASI ---
-const BASE_URL = 'https://maknaflow-staging.onrender.com/api';
-const SESSION_DIR = 'auth_baileys'; 
-const CONTACTS_FILE = 'contacts_mapping.json'; // File database manual kita
-// Tambahan QR dijadikan kode
-const usePairingCode = false; // Ubah jadi false jika ingin balik ke QR
-const nomorBot = '628211019477'; // NOMOR BOT WHATSAPP ANDA
+// ================= CONFIG & DATABASE =================
+const BASE_URL = 'https://maknaflow-staging.onrender.com/api'; // Pastikan URL ini benar
+const SESSION_DIR = 'auth_baileys';
+const usePairingCode = false;
+const nomorBot = '628211019477';
 
-// State Management
-const userSessions = {};
-let MASTER_DATA = null;
-let LID_MAPPING = {}; // Cache di RAM
+// ID Owner hanya digunakan untuk auto-reset session jika perlu, 
+// tapi data staffnya sendiri sudah diambil dari API.
+const ID_ADHIF = '50032124375122@lid'; 
 
-// --- FUNGSI LOAD/SAVE KONTAK MANUAL ---
-function loadContacts() {
-    if (fs.existsSync(CONTACTS_FILE)) {
-        try {
-            const raw = fs.readFileSync(CONTACTS_FILE, 'utf-8');
-            LID_MAPPING = JSON.parse(raw);
-            console.log(`📂 Memuat ${Object.keys(LID_MAPPING).length} kontak terdaftar.`);
-        } catch (e) {
-            console.error("⚠️ Gagal baca file kontak:", e);
-        }
-    }
-}
+// Database & Session Storage
+let STAFF_DATABASE = {};
+const userSession = {};
+const SESSION_OWNER = {}; // Session untuk MULTI_CABANG (Owner/Agus/PIC)
 
-function saveContact(lid, phone) {
-    LID_MAPPING[lid] = phone;
-    fs.writeFileSync(CONTACTS_FILE, JSON.stringify(LID_MAPPING, null, 2));
-    console.log(`💾 Kontak disimpan: ${lid} -> ${phone}`);
-}
+// =========================================================
+// 🌳 MENU & LIST CABANG
+// =========================================================
+// List ini digunakan saat user MULTI_CABANG perlu memilih unit.
+// Idealnya list ini juga bisa diambil dari API, tapi hardcode di sini 
+// untuk UI menu pilihan masih oke selama nama cabangnya SAMA PERSIS dengan di Database Django.
 
-// Load kontak saat start
-loadContacts();
+// 1. Menu Owner (Adhif)
+const MENU_OWNER = {
+    1: {
+        nama: "Laundry",
+        cabang: ["Laundry Bosku Babelan (Laundry Service)", "Laundry Bosku Kedaung (Laundry Service)", "MAVEN Laundry Rorotan (Laundry Service)", "MAVEN Laundry Rorotan 2 (Laundry Service)", "Laundry Blok A"]
+    },
+    2: { nama: "Car wash", cabang: ["Carwash Priok"] },
+    3: { nama: "Parkiran", cabang: ["Parkiran Blok A"] },
+    4: { nama: "Kosan", cabang: ["Kost-kostan Blok A", "Kost-kostan Cemput"] }
+};
 
-// --- FUNGSI UPDATE DATA ---
-async function fetchMasterData() {
+// 2. Menu Agus (Blok A)
+const LIST_AGUS = [
+    { nama: "Laundry Blok A", unit: "Laundry" },
+    { nama: "Parkiran Blok A", unit: "Parkiran" },
+    { nama: "Kost-kostan Blok A", unit: "Kost" }
+];
+
+// 3. Menu PIC Rorotan
+const LIST_ROROTAN = [
+    { nama: "MAVEN Laundry Rorotan (Laundry Service)", unit: "Laundry" },
+    { nama: "MAVEN Laundry Rorotan 2 (Laundry Service)", unit: "Laundry" }
+];
+
+// ================= FUNGSI & LOGIC =================
+async function fetchStaffData() {
     try {
-        console.log("🔄 Mengambil data terbaru dari Django...");
-        const response = await axios.get(`${BASE_URL}/bot/master-data/`);
-        MASTER_DATA = response.data;
-        console.log(`✅ Data Master Terupdate: ${MASTER_DATA.branches.length} Cabang, ${MASTER_DATA.categories.length} Kategori.`);
+        console.log("🔄 Menghubungkan ke Database Staff (Ultimate)...");
+        // API ini sekarang sudah support Multi-Identity & Multi-Branch
+        const response = await axios.get(`${BASE_URL}/bot/staff-list/`);
+        STAFF_DATABASE = response.data;
+
+        // =========================================================
+        // 🚫 MANUAL INJECT DIHAPUS TOTAL 🚫
+        // Django Admin sekarang adalah "Single Source of Truth".
+        // =========================================================
+
+        console.log(`✅ DATABASE TERHUBUNG! ${Object.keys(STAFF_DATABASE).length} staff/identitas siap.`);
     } catch (error) {
-        console.error("❌ Gagal ambil data master:", error.message);
+        console.error("❌ Gagal konek ke API Staff:", error.message);
     }
 }
 
-// --- FUNGSI UTAMA BOT ---
-async function connectToWhatsApp() {
-    // --- KODE PEMBERSIH (WAJIB ADA) ---
-    // const authPath = './auth_baileys';
-    // // Hapus folder sesi setiap kali bot nyala ulang
-    // if (fs.existsSync(authPath)) {
-    //     fs.rmSync(authPath, { recursive: true, force: true });
-    //     console.log('🗑️ Sesi lama dihapus agar login fresh!');
-    // }
-    
-    const { state, saveCreds } = await useMultiFileAuthState(SESSION_DIR);
+const formatRupiah = (angka) => new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', minimumFractionDigits: 0 }).format(angka);
+const getWaktu = () => {
+    const now = new Date();
+    return {
+        date: now.toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' }),
+        time: now.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }) + " WIB"
+    };
+};
 
-    const sock = makeWASocket({
-        auth: state,
-        printQRInTerminal: true,
-        logger: pino({ level: 'silent' }),
-        browser: ["Ubuntu", "Chrome", "20.0.04"],
-        connectTimeoutMs: 60000,
-        keepAliveIntervalMs: 10000,
-        emitOwnEvents: true,
-    });
+async function kirimLaporanKeServer(noHp, dataLaporan) {
+    try {
+        console.log(`🚀 Mengirim Laporan: ${dataLaporan.cabang} oleh ${dataLaporan.nama}`);
+        
+        // Payload disesuaikan dengan Endpoint InternalWhatsAppIngestion di Django
+        const payload = {
+            phone_number: noHp,           // ID WA (Bisa @s.whatsapp.net atau @lid)
+            branch_id: dataLaporan.cabang, // Nama Cabang (String)
+            amount: 0,                    // Total Amount (Nanti dihitung per item atau total bersih)
+            // KITA KIRIM DATA AGREGAT ATAU PER TRANSAKSI?
+            // Untuk kesederhanaan saat ini, kita kirim 1 Transaksi "Rekap Closing"
+            // Tapi idealnya API menerima array transaksi.
+            // SEMENTARA: Kita kirim Total Pemasukan sebagai INCOME dan Pengeluaran sebagai EXPENSE secara terpisah.
+        };
 
-    // --- LOGIKA PAIRING CODE ---
-    if (usePairingCode && !sock.authState.creds.registered) {
-        console.log(`⏳ Menunggu request Pairing Code untuk nomor: ${nomorBot}...`);
-        setTimeout(async () => {
-            try {
-                const code = await sock.requestPairingCode(nomorBot);
-                console.log(`\n================================================`);
-                console.log(`🌟 KODE PAIRING ANDA: ${code}`);
-                console.log(`================================================\n`);
-                console.log(`👉 Buka WA di HP > Linked Devices > Link a Device > Link with phone number instead.`);
-            } catch (err) {
-                console.error('Gagal request pairing code:', err);
-            }
-        }, 5000); // Tunggu 5 detik biar siap
+        // 1. Kirim Pemasukan CASH
+        if (dataLaporan.in_cash > 0) {
+            await axios.post(`${BASE_URL}/ingestion/internal-wa/`, {
+                phone_number: noHp,
+                branch_id: dataLaporan.cabang,
+                type: 'INCOME',
+                amount: dataLaporan.in_cash,
+                notes: `[CASH] ${dataLaporan.note_income || 'Setoran Harian'}`
+            });
+        }
+        
+        // 2. Kirim Pemasukan QRIS
+        if (dataLaporan.in_qris > 0) {
+             await axios.post(`${BASE_URL}/ingestion/internal-wa/`, {
+                phone_number: noHp,
+                branch_id: dataLaporan.cabang,
+                type: 'INCOME',
+                amount: dataLaporan.in_qris,
+                notes: `[QRIS] ${dataLaporan.note_income || 'Setoran Harian'}`
+            });
+        }
+
+        // 3. Kirim Pemasukan TRANSFER
+        if (dataLaporan.in_tf > 0) {
+             await axios.post(`${BASE_URL}/ingestion/internal-wa/`, {
+                phone_number: noHp,
+                branch_id: dataLaporan.cabang,
+                type: 'INCOME',
+                amount: dataLaporan.in_tf,
+                notes: `[TRANSFER] ${dataLaporan.note_income || 'Setoran Harian'}`
+            });
+        }
+
+        // 4. Kirim Pengeluaran (EXPENSE)
+        if (dataLaporan.out_expense > 0) {
+            await axios.post(`${BASE_URL}/ingestion/internal-wa/`, {
+                phone_number: noHp,
+                branch_id: dataLaporan.cabang,
+                type: 'EXPENSE',
+                amount: dataLaporan.out_expense,
+                notes: dataLaporan.note_expense || 'Pengeluaran Operasional'
+            });
+        }
+
+        return true;
+    } catch (error) {
+        console.error("❌ Gagal kirim ke Server:", error.response?.data || error.message);
+        return false;
     }
+}
+
+// ================= KONEKSI UTAMA =================
+async function connectToWhatsApp() {
+    const { state, saveCreds } = await useMultiFileAuthState(SESSION_DIR);
+    const sock = makeWASocket({
+        auth: state, printQRInTerminal: true, logger: pino({ level: 'silent' }),
+        browser: ["Ubuntu", "Chrome", "20.0.04"], connectTimeoutMs: 60000,
+        keepAliveIntervalMs: 10000, emitOwnEvents: true,
+    });
 
     sock.ev.on('connection.update', async (update) => {
         const { connection, lastDisconnect, qr } = update;
-
-        if (qr && !usePairingCode) {
-            // Hanya tampilkan QR jika mode Pairing Code dimatikan
-            console.log('📌 Scan QR Code di bawah ini:');
-            qrcode.generate(qr, { small: true });
-        }
-
+        if (qr && !usePairingCode) qrcode.generate(qr, { small: true });
         if (connection === 'close') {
             const shouldReconnect = (lastDisconnect.error instanceof Boom)?.output?.statusCode !== DisconnectReason.loggedOut;
-            console.log('⚠️ Koneksi terputus. Reconnect otomatis...', shouldReconnect);
-            if (shouldReconnect) {
-                connectToWhatsApp();
-            } else {
-                console.log('❌ Logout. Hapus folder auth_baileys untuk login ulang.');
-            }
+            if (shouldReconnect) connectToWhatsApp();
         } else if (connection === 'open') {
-            console.log('🚀 Bot Siap & Terhubung Stabil (Mode Pairing)!');
-            await fetchMasterData();
+            console.log('✅ BOT TERHUBUNG!');
+            await fetchStaffData();
         }
     });
 
     sock.ev.on('creds.update', saveCreds);
 
-    sock.ev.on('messages.upsert', async ({ messages, type }) => {
-        if (type !== 'notify') return;
-        const msg = messages[0];
-        if (!msg.message) return;
+    // ================= HANDLING PESAN =================
+    sock.ev.on('messages.upsert', async ({ messages }) => {
+        try {
+            const msg = messages[0];
+            if (!msg.message || msg.key.fromMe) return;
+            const noHp = jidNormalizedUser(msg.key.remoteJid);
+            const pesan = (msg.message.conversation || msg.message.extendedTextMessage?.text || "").trim();
+            if (noHp.includes(nomorBot)) return;
 
-        // --- 1. IDENTIFIKASI PENGIRIM ---
-        let rawSender = msg.key.remoteJid;
-        
-        // Cek apakah pesan ini dari Staff (via LID/Private ID)
-        if (msg.key.remoteJid.endsWith('@lid') || msg.key.participant?.endsWith('@lid')) {
-             // Ambil ID LID-nya
-             rawSender = msg.key.remoteJid.endsWith('@lid') ? msg.key.remoteJid : msg.key.participant;
-        }
+            console.log(`📩 Chat Masuk: ${noHp} | Isi: ${pesan}`);
 
-        rawSender = jidNormalizedUser(rawSender); // Format: 2566xxx@lid
-        let finalSender = rawSender;
+            // Cek Database Staff (Dari API Django)
+            const staffData = STAFF_DATABASE[noHp];
+            if (!staffData) { 
+                console.log(`⛔ Ditolak: Nomor ${noHp} tidak terdaftar di Django.`); 
+                // Opsional: Reply "Nomor Anda tidak terdaftar" 
+                return; 
+            }
 
-        // Cek Mapping Manual
-        if (LID_MAPPING[rawSender]) {
-            finalSender = LID_MAPPING[rawSender]; // Ubah jadi 628xxx
-            // console.log(`🔍 Translate ID: ${rawSender} -> ${finalSender}`);
-        } else {
-            // Jika belum ada di mapping, coba ambil nomor biasa jika formatnya sudah nomor
-            finalSender = finalSender.split('@')[0];
-        }
-        
-        // Bersihkan finalSender agar hanya angka (jika format 628xxx@s.whatsapp.net)
-        if (finalSender.includes('@')) {
-            finalSender = finalSender.split('@')[0];
-        }
+            // ============================================================
+            // 🔄 FLOW MULTI-CABANG (OWNER / AGUS / PIC)
+            // ============================================================
+            
+            // Trigger Reset jika ketik /lapor
+            if (pesan.toLowerCase() === '/lapor' && staffData.cabang === 'MULTI_CABANG') {
+                delete userSession[noHp]; 
+                delete SESSION_OWNER[noHp]; // Reset sesi menu pilihan
+            }
 
-        // Helper Reply
-        const reply = async (txt) => {
-            await sock.sendMessage(msg.key.remoteJid, { text: txt }, { quoted: msg });
-        };
+            // A. TAMPILKAN MENU UTAMA (Jika Multi Cabang & Belum Pilih)
+            if (staffData.cabang === "MULTI_CABANG" && pesan.toLowerCase() === "/lapor") {
+                // Deteksi Siapa ini berdasarkan Nama User di Django
+                const namaUser = staffData.nama.toLowerCase();
 
-        const messageContent = msg.message.conversation || msg.message.extendedTextMessage?.text;
-        if (!messageContent) return;
-        const text = messageContent.trim();
-        
-        console.log(`📩 Pesan dari ${finalSender} (Raw: ${rawSender}): "${text}"`);
+                if (namaUser.includes("adhif") || namaUser.includes("abella")) {
+                    // Menu Owner Adhif/Abella
+                    let menu = "👑 *Menu Owner*\nMau lapor unit bisnis mana?\n\n";
+                    Object.keys(MENU_OWNER).forEach((key) => { menu += `${key}. ${MENU_OWNER[key].nama}\n`; });
+                    SESSION_OWNER[noHp] = { status: "WAITING_UNIT_OWNER" };
+                    await sock.sendMessage(noHp, { text: menu + "\n_Ketik angka_" });
 
-        // --- 2. FITUR REGISTRASI MANUAL (/iam) ---
-        // Jika Staff mengetik: /iam 628211019477
-        if (text.toLowerCase().startsWith('/iam ')) {
-            const inputNumber = text.split(' ')[1];
-            if (!inputNumber || isNaN(inputNumber)) {
-                await reply('❌ Format salah.\nGunakan: */iam 628xxxxxxxx*');
+                } else if (namaUser.includes("agus")) {
+                    // Menu Agus
+                    let menu = `👋 Halo *${staffData.nama}* (Blok A).\nPilih Bisnis:\n\n`;
+                    LIST_AGUS.forEach((item, idx) => { menu += `${idx + 1}. ${item.nama}\n`; });
+                    SESSION_OWNER[noHp] = { status: "WAITING_CHOICE_AGUS" };
+                    await sock.sendMessage(noHp, { text: menu + "\n_Ketik angka_" });
+
+                } else if (namaUser.includes("pic") || namaUser.includes("rorotan")) {
+                    // Menu PIC Rorotan
+                    let menu = `👋 Halo *${staffData.nama}*.\nPilih Cabang Rorotan:\n\n`;
+                    LIST_ROROTAN.forEach((item, idx) => { menu += `${idx + 1}. ${item.nama}\n`; });
+                    SESSION_OWNER[noHp] = { status: "WAITING_CHOICE_ROROTAN" };
+                    await sock.sendMessage(noHp, { text: menu + "\n_Ketik angka_" });
+                } else {
+                    // Default Multi Cabang (Jika ada user lain)
+                    await sock.sendMessage(noHp, { text: "⚠️ Akun Anda Multi-Cabang tapi menu belum dikonfigurasi. Hubungi Admin." });
+                }
                 return;
             }
-            
-            // Simpan Mapping: LID -> Nomor HP
-            saveContact(rawSender, inputNumber);
-            await reply(`✅ Berhasil! Bot sekarang mengenali Anda sebagai: *${inputNumber}*\nSilakan ketik /lapor untuk memulai.`);
-            return;
-        }
 
-        // --- LOGIC REFRESH ---
-        if (text === '/refresh') {
-            await fetchMasterData();
-            await reply('✅ Data Database Django diperbarui!');
-            return;
-        }
+            // B. HANDLE PILIHAN MENU OWNER
+            if (staffData.cabang === "MULTI_CABANG" && SESSION_OWNER[noHp]?.status === "WAITING_UNIT_OWNER") {
+                const pilihan = parseInt(pesan);
+                if (MENU_OWNER[pilihan]) {
+                    let menuCabang = `📂 Unit: *${MENU_OWNER[pilihan].nama}*\nPilih Cabang:\n`;
+                    MENU_OWNER[pilihan].cabang.forEach((cab, idx) => { menuCabang += `${idx + 1}. ${cab}\n`; });
+                    SESSION_OWNER[noHp] = { status: "WAITING_BRANCH_OWNER", selectedUnit: MENU_OWNER[pilihan] };
+                    await sock.sendMessage(noHp, { text: menuCabang + "\n_Ketik angka_" });
+                } else { await sock.sendMessage(noHp, { text: "⛔ Pilihan salah." }); }
+                return;
+            }
+            if (staffData.cabang === "MULTI_CABANG" && SESSION_OWNER[noHp]?.status === "WAITING_BRANCH_OWNER") {
+                const idx = parseInt(pesan) - 1;
+                const unit = SESSION_OWNER[noHp].selectedUnit;
+                if (unit.cabang[idx]) {
+                    const cabangFinal = unit.cabang[idx];
+                    SESSION_OWNER[noHp] = { status: "READY", cabangAsli: cabangFinal }; // Set temporary branch
+                    
+                    // Mulai Flow Input
+                    await sock.sendMessage(noHp, { text: `✅ Mode: *${cabangFinal}*\n\n1️⃣ Masukkan Total **Pemasukan CASH**:\n(Ketik 0 jika tidak ada)` });
+                    userSession[noHp] = { step: 'INPUT_INCOME_CASH', data: { ...staffData, cabang: cabangFinal } };
+                } else { await sock.sendMessage(noHp, { text: "⛔ Pilihan salah." }); }
+                return;
+            }
 
-        // --- LOGIC LAPOR ---
-        if (!userSessions[finalSender]) {
-            if (text.toLowerCase() === '/lapor') {
-                
-                // Cek apakah nomor ini terdaftar (Apakah mapping berhasil?)
-                // Jika masih berupa LID (2566...), tolak!
-                if (finalSender.startsWith('2566') || finalSender.length > 15) {
-                    await reply('⚠️ Bot belum mengenali nomor asli Anda.\n\nKetik: */iam <NomorHPAnda>*\nContoh: */iam 628211019477*');
+            // C. HANDLE PILIHAN MENU AGUS
+            if (staffData.cabang === "MULTI_CABANG" && SESSION_OWNER[noHp]?.status === "WAITING_CHOICE_AGUS") {
+                const idx = parseInt(pesan) - 1;
+                if (LIST_AGUS[idx]) {
+                    const pil = LIST_AGUS[idx];
+                    SESSION_OWNER[noHp] = { status: "READY", cabangAsli: pil.nama };
+                    
+                    await sock.sendMessage(noHp, { text: `✅ Mode: *${pil.nama}*\n\n1️⃣ Masukkan Total **Pemasukan CASH**:\n(Ketik 0 jika tidak ada)` });
+                    userSession[noHp] = { step: 'INPUT_INCOME_CASH', data: { ...staffData, cabang: pil.nama } };
+                }
+                return;
+            }
+
+            // D. HANDLE PILIHAN MENU ROROTAN
+            if (staffData.cabang === "MULTI_CABANG" && SESSION_OWNER[noHp]?.status === "WAITING_CHOICE_ROROTAN") {
+                const idx = parseInt(pesan) - 1;
+                if (LIST_ROROTAN[idx]) {
+                    const pil = LIST_ROROTAN[idx];
+                    SESSION_OWNER[noHp] = { status: "READY", cabangAsli: pil.nama };
+
+                    await sock.sendMessage(noHp, { text: `✅ Mode: *${pil.nama}*\n\n1️⃣ Masukkan Total **Pemasukan CASH**:\n(Ketik 0 jika tidak ada)` });
+                    userSession[noHp] = { step: 'INPUT_INCOME_CASH', data: { ...staffData, cabang: pil.nama } };
+                }
+                return;
+            }
+
+            // ============================================================
+            // 📝 LOGIKA INPUT LAPORAN (SEQUENTIAL)
+            // ============================================================
+
+            // Trigger Awal (Staff Biasa - Single Branch)
+            if (pesan.toLowerCase() === '/lapor' && staffData.cabang !== "MULTI_CABANG") {
+                userSession[noHp] = { step: 'INPUT_INCOME_CASH', data: staffData };
+                await sock.sendMessage(noHp, { 
+                    text: `🏢 *Laporan Closing: ${staffData.cabang}*\n\n1️⃣ Masukkan Total **Pemasukan CASH**:\n(Angka saja, misal: 100000)` 
+                });
+                return;
+            }
+
+            // HANDLE INPUT STEPS
+            const session = userSession[noHp];
+            if (session) {
+                const cleanInput = pesan.replace(/[^0-9]/g, ''); 
+                const nominal = cleanInput ? parseInt(cleanInput) : 0;
+
+                // 1. CASH -> QRIS
+                if (session.step === 'INPUT_INCOME_CASH') {
+                    session.data.in_cash = nominal;
+                    session.step = 'INPUT_INCOME_QRIS';
+                    await sock.sendMessage(noHp, { text: `✅ Cash: ${formatRupiah(nominal)}\n\n2️⃣ Masukkan Total **Pemasukan QRIS**:\n(Ketik 0 jika tidak ada)` });
+                    return;
+                }
+                // 2. QRIS -> TRANSFER
+                if (session.step === 'INPUT_INCOME_QRIS') {
+                    session.data.in_qris = nominal;
+                    session.step = 'INPUT_INCOME_TRANSFER';
+                    await sock.sendMessage(noHp, { text: `✅ QRIS: ${formatRupiah(nominal)}\n\n3️⃣ Masukkan Total **Pemasukan TRANSFER**:\n(Ketik 0 jika tidak ada)` });
+                    return;
+                }
+                // 3. TRANSFER -> CATATAN PEMASUKAN
+                if (session.step === 'INPUT_INCOME_TRANSFER') {
+                    session.data.in_tf = nominal;
+                    session.step = 'INPUT_CATATAN_INCOME';
+                    await sock.sendMessage(noHp, { text: `✅ Transfer: ${formatRupiah(nominal)}\n\n📝 Ada **Catatan PEMASUKAN**?\n(Misal: "Selisih 500", "Customer Hutang". Ketik '-' jika aman)` });
+                    return;
+                }
+                // 4. CATATAN INCOME -> EXPENSE
+                if (session.step === 'INPUT_CATATAN_INCOME') {
+                    session.data.note_income = pesan;
+                    session.step = 'INPUT_EXPENSE';
+                    await sock.sendMessage(noHp, { text: `✅ Catatan Pemasukan Tersimpan.\n\n4️⃣ Masukkan Total **PENGELUARAN** (Expense):\n(Operasional, belanja, dll. Ketik 0 jika nihil)` });
+                    return;
+                }
+                // 5. EXPENSE -> CATATAN PENGELUARAN
+                if (session.step === 'INPUT_EXPENSE') {
+                    session.data.out_expense = nominal;
+                    session.step = 'INPUT_CATATAN_EXPENSE';
+                    await sock.sendMessage(noHp, { text: `✅ Expense: ${formatRupiah(nominal)}\n\n📝 Tulis Rincian **Catatan PENGELUARAN**:\n(Misal: "Beli Sabun 50rb, Sampah 20rb". Ketik '-' jika tidak ada)` });
                     return;
                 }
 
-                if (!MASTER_DATA || !MASTER_DATA.branches) {
-                    await fetchMasterData();
-                    if (!MASTER_DATA) {
-                        await reply('❌ Gagal menghubungi server.');
-                        return;
+                // 6. FINALISASI & KIRIM KE SERVER
+                if (session.step === 'INPUT_CATATAN_EXPENSE') {
+                    session.data.note_expense = pesan;
+                    const { date, time } = getWaktu();
+                    
+                    const totalMasuk = (session.data.in_cash || 0) + (session.data.in_qris || 0) + (session.data.in_tf || 0);
+                    const bersih = totalMasuk - (session.data.out_expense || 0);
+
+                    // --- KIRIM KE SERVER DJANGO ---
+                    await sock.sendMessage(noHp, { text: "⏳ Sedang mengirim data ke server..." });
+                    const sukses = await kirimLaporanKeServer(noHp, session.data);
+
+                    if (sukses) {
+                        const struk = `✅ *LAPORAN CLOSING DITERIMA & TERSIMPAN*
+--------------------------------
+📅 *Tanggal:* ${date}
+⏰ *Waktu:* ${time}
+🏢 *Cabang:* ${session.data.cabang}
+👤 *Pelapor:* ${session.data.nama}
+
+*RINCIAN PEMASUKAN:*
+💵 Cash: ${formatRupiah(session.data.in_cash)}
+📱 QRIS: ${formatRupiah(session.data.in_qris)}
+💳 Transfer: ${formatRupiah(session.data.in_tf)}
+📝 *Note:* ${session.data.note_income}
+--------------------------------
+➕ *Total Omset:* ${formatRupiah(totalMasuk)}
+
+*PENGELUARAN:*
+🔻 Expense: ${formatRupiah(session.data.out_expense)}
+📝 *Note:* ${session.data.note_expense}
+--------------------------------
+💰 *SETORAN BERSIH:* ${formatRupiah(bersih)}
+--------------------------------
+Data telah aman di Database Server.`;
+                        await sock.sendMessage(noHp, { text: struk });
+                    } else {
+                        await sock.sendMessage(noHp, { text: "⚠️ Data tercatat di Chat tapi **GAGAL** masuk Server. Hubungi Admin." });
                     }
+
+                    // Reset Session
+                    delete userSession[noHp];
+                    delete SESSION_OWNER[noHp];
                 }
-                userSessions[finalSender] = { step: 1, data: { phone_number: finalSender } };
-                await reply('Halo Staff! Pilih Unit Bisnis:\n1. Laundry\n2. Carwash\n3. Kos');
-            }
-        } else {
-            const session = userSessions[finalSender];
-
-            if (text.toLowerCase() === 'batal') {
-                delete userSessions[finalSender];
-                await reply('🚫 Transaksi dibatalkan.');
-                return;
             }
 
-            switch (session.step) {
-                case 1: 
-                    let selectedType = '';
-                    if (text === '1') selectedType = 'LAUNDRY';
-                    else if (text === '2') selectedType = 'CARWASH';
-                    else if (text === '3') selectedType = 'KOS';
-
-                    if (!selectedType) { await reply('❌ Pilihan salah.'); return; }
-
-                    const filteredBranches = MASTER_DATA.branches.filter(b => b.branch_type === selectedType);
-                    if (filteredBranches.length === 0) {
-                        await reply(`❌ Belum ada cabang ${selectedType}.`);
-                        delete userSessions[finalSender];
-                        return;
-                    }
-                    session.temp_branches = filteredBranches;
-                    let menuText = `🏢 Pilih Cabang ${selectedType}:\n`;
-                    filteredBranches.forEach((branch, index) => {
-                        menuText += `${index + 1}. ${branch.name}\n`;
-                    });
-                    session.step = 2;
-                    await reply(menuText);
-                    break;
-
-                case 2:
-                    const branchIndex = parseInt(text) - 1;
-                    if (session.temp_branches && session.temp_branches[branchIndex]) {
-                        session.data.branch_id = session.temp_branches[branchIndex].id;
-                        session.data.branch_name = session.temp_branches[branchIndex].name;
-                        session.step = 3;
-                        await reply(`✅ Cabang *${session.data.branch_name}* terpilih.\n\n💰 Tipe:\n1. INCOME\n2. EXPENSE`);
-                    } else { await reply('❌ Nomor cabang tidak valid.'); }
-                    break;
-
-                case 3:
-                    const types = { '1': 'INCOME', '2': 'EXPENSE' };
-                    if (types[text]) {
-                        session.data.type = types[text];
-                        session.step = 4;
-                        const filteredCats = MASTER_DATA.categories.filter(c => c.transaction_type === types[text]);
-                        if (filteredCats.length === 0) { await reply('❌ Kategori kosong.'); return; }
-                        session.temp_cats = filteredCats;
-                        let catMenu = `📂 Pilih Kategori ${types[text]}:\n`;
-                        filteredCats.forEach((cat, index) => {
-                            catMenu += `${index + 1}. ${cat.name}\n`;
-                        });
-                        await reply(catMenu);
-                    } else { await reply('❌ Pilihan salah.'); }
-                    break;
-
-                case 4:
-                    const catIndex = parseInt(text) - 1;
-                    if (session.temp_cats && session.temp_cats[catIndex]) {
-                        session.data.category_id = session.temp_cats[catIndex].id;
-                        session.data.category_name = session.temp_cats[catIndex].name;
-                        session.step = 5;
-                        await reply(`Kategori: *${session.data.category_name}*\n\n💵 Masukkan Nominal (Angka):`);
-                    } else { await reply('❌ Nomor kategori tidak valid.'); }
-                    break;
-
-                case 5:
-                    const cleanAmount = text.replace(/[^0-9]/g, '');
-                    if (cleanAmount && !isNaN(cleanAmount)) {
-                        session.data.amount = parseInt(cleanAmount);
-                        session.step = 6;
-                        await reply('📝 Ada catatan? (Ketik "-" jika tidak ada)');
-                    } else { await reply('❌ Harap masukkan angka valid.'); }
-                    break;
-
-                case 6:
-                    session.data.notes = text;
-                    await reply('⏳ Mengirim data ke server...');
-                    
-                    try {
-                        const payload = {
-                            phone_number: session.data.phone_number,
-                            branch_id: session.data.branch_id,
-                            category_id: session.data.category_id,
-                            type: session.data.type,
-                            amount: session.data.amount,
-                            notes: session.data.notes
-                        };
-
-                        const response = await axios.post(`${BASE_URL}/ingestion/internal-wa/`, payload);
-
-                        // --- FORMAT WAKTU (WIB) ---
-                        // Kita paksa Timezone Asia/Jakarta agar jamnya sesuai WIB (bukan jam server London/USA)
-                        const now = new Date();
-                        const optionsDate = { timeZone: 'Asia/Jakarta', day: 'numeric', month: 'long', year: 'numeric' };
-                        const optionsTime = { timeZone: 'Asia/Jakarta', hour: '2-digit', minute: '2-digit', hour12: false };
-                        
-                        const tgl = now.toLocaleDateString('id-ID', optionsDate);
-                        const jam = now.toLocaleTimeString('id-ID', optionsTime);
-
-                        // Coba cari ID
-                        const trxId = response.data.id || response.data.pk || response.data.transaction_id || response.data.data?.id || "Pending";
-
-                        // Coba cari Metode Pembayaran, kalo nggak ada default ke Tunai
-                        const payMethod = response.data.payment_method || "TUNAI (CASH)";
-
-                        // --- STRUK DIGITAL LENGKAP ---
-                        const struk = `✅ *TRANSAKSI BERHASIL DICATAT*\n` +
-                                      `--------------------------------\n` +
-                                      `🆔 *ID:* ${trxId}\n` +
-                                      `📅 *Tanggal:* ${tgl}\n` +
-                                      `⏰ *Waktu:* ${jam} WIB\n` +
-                                      `🏢 *Cabang:* ${session.data.branch_name}\n` +
-                                      `📂 *Kategori:* ${session.data.category_name}\n` +
-                                      `🔄 *Tipe:* ${session.data.type}\n` +
-                                      `💳 *Metode:* ${payMethod}\n` +
-                                      `💰 *Nominal:* Rp ${session.data.amount.toLocaleString('id-ID')}\n` +
-                                      `📝 *Catatan:* ${session.data.notes}\n` +
-                                      `--------------------------------\n` +
-                                      `Data sudah masuk ke Dashboard Admin.`;
-
-                        await reply(struk);
-
-                    } catch (error) {
-                        console.error('API Error:', error.message);
-                        
-                        // Ambil pesan error asli dari Django
-                        let rawError = error.response?.data?.detail || error.response?.data?.error || JSON.stringify(error.response?.data) || error.message;
-                        
-                        let humanMessage = "";
-
-                        // --- LOGIKA PENERJEMAH ERROR ---
-                        if (rawError.includes('duplicate key') || rawError.includes('unique constraint')) {
-                            // 1. JIKA DUPLIKAT
-                            humanMessage = "⚠️ *GAGAL: DATA DUPLIKAT*\n\nTransaksi ini sepertinya sudah pernah diinput sebelumnya (Nominal, Kategori & Cabang sama persis). Sistem menolak input ganda.";
-                        
-                        } else if (error.response?.status === 404) {
-                            // 2. JIKA USER BELUM ASSIGN CABANG
-                            humanMessage = `❌ *Akses Ditolak*\n\nNomor HP Anda (${session.data.phone_number}) belum terdaftar atau belum di-assign ke Cabang ini di Admin. Hubungi Owner.`;
-                        
-                        } else {
-                            // 3. ERROR LAINNYA
-                            humanMessage = `❌ *Gagal Mencatat Transaksi*\n\nTeknis: ${rawError}`;
-                        }
-
-                        await reply(humanMessage);
-                    }
-                    
-                    delete userSessions[finalSender];
-                    break;
-            }
+        } catch (error) {
+            console.error("Error handler:", error);
         }
     });
 }
 
-// --- FITUR WAJIB: DUMMY SERVER UNTUK RENDER ---
+connectToWhatsApp();
+
+// =========================================================
+// 🔌 SERVER PEMANCING (DUMMY SERVER) UNTUK RENDER
+// =========================================================
+// Wajib ada agar Render tidak mematikan service (Error: Port Binding)
+// dan agar bisa di-ping oleh UptimeRobot.
+
 const http = require('http');
-const port = process.env.PORT || 10000;
+const port = process.env.PORT || 8080;
 
 const server = http.createServer((req, res) => {
-    res.writeHead(200);
-    res.end('Bot WhatsApp MaknaFlow Aktif & Sehat! 🚀');
+    res.writeHead(200, { 'Content-Type': 'text/plain' });
+    res.end('MANTAP! Bot WhatsApp Maknaflow Sedang Berjalan 24/7. Jangan dimatikan!');
 });
 
-server.listen(port, '0.0.0.0', () => {
-    console.log(`✅ Server dummy berjalan di port ${port}`);
+server.listen(port, () => {
+    console.log(`✅ SERVER DUMMY BERJALAN DI PORT: ${port}`);
 });
-
-connectToWhatsApp();
