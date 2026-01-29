@@ -247,7 +247,7 @@ async function connectToWhatsApp() {
                     SESSION_OWNER[noHp] = { status: "READY", cabangAsli: cabangFinal }; // Set temporary branch
                     
                     // Mulai Flow Input
-                    await sock.sendMessage(noHp, { text: `✅ Mode: *${cabangFinal}*\n\n1️⃣ Masukkan Total **Pemasukan CASH**:\n(Ketik 0 jika tidak ada)` });
+                    await sock.sendMessage(noHp, { text: `✅ Mode: *${cabangFinal}*\n\n1️⃣ Masukkan Total *Pemasukan CASH*:\n(Ketik 0 jika tidak ada)` });
                     userSession[noHp] = { step: 'INPUT_INCOME_CASH', data: { ...staffData, cabang: cabangFinal } };
                 } else { await sock.sendMessage(noHp, { text: "⛔ Pilihan salah." }); }
                 return;
@@ -260,7 +260,7 @@ async function connectToWhatsApp() {
                     const pil = LIST_AGUS[idx];
                     SESSION_OWNER[noHp] = { status: "READY", cabangAsli: pil.nama };
                     
-                    await sock.sendMessage(noHp, { text: `✅ Mode: *${pil.nama}*\n\n1️⃣ Masukkan Total **Pemasukan CASH**:\n(Ketik 0 jika tidak ada)` });
+                    await sock.sendMessage(noHp, { text: `✅ Mode: *${pil.nama}*\n\n1️⃣ Masukkan Total *Pemasukan CASH*:\n(Ketik 0 jika tidak ada)` });
                     userSession[noHp] = { step: 'INPUT_INCOME_CASH', data: { ...staffData, cabang: pil.nama } };
                 }
                 return;
@@ -273,7 +273,7 @@ async function connectToWhatsApp() {
                     const pil = LIST_ROROTAN[idx];
                     SESSION_OWNER[noHp] = { status: "READY", cabangAsli: pil.nama };
 
-                    await sock.sendMessage(noHp, { text: `✅ Mode: *${pil.nama}*\n\n1️⃣ Masukkan Total **Pemasukan CASH**:\n(Ketik 0 jika tidak ada)` });
+                    await sock.sendMessage(noHp, { text: `✅ Mode: *${pil.nama}*\n\n1️⃣ Masukkan Total *Pemasukan CASH*:\n(Ketik 0 jika tidak ada)` });
                     userSession[noHp] = { step: 'INPUT_INCOME_CASH', data: { ...staffData, cabang: pil.nama } };
                 }
                 return;
@@ -287,7 +287,7 @@ async function connectToWhatsApp() {
             if (pesan.toLowerCase() === '/lapor' && staffData.cabang !== "MULTI_CABANG") {
                 userSession[noHp] = { step: 'INPUT_INCOME_CASH', data: staffData };
                 await sock.sendMessage(noHp, { 
-                    text: `🏢 *Laporan Closing: ${staffData.cabang}*\n\n1️⃣ Masukkan Total **Pemasukan CASH**:\n(Angka saja, misal: 100000)` 
+                    text: `🏢 *Laporan Closing: ${staffData.cabang}*\n\n1️⃣ Masukkan Total *Pemasukan CASH*:\n(Angka saja, misal: 100000)` 
                 });
                 return;
             }
@@ -302,35 +302,35 @@ async function connectToWhatsApp() {
                 if (session.step === 'INPUT_INCOME_CASH') {
                     session.data.in_cash = nominal;
                     session.step = 'INPUT_INCOME_QRIS';
-                    await sock.sendMessage(noHp, { text: `✅ Cash: ${formatRupiah(nominal)}\n\n2️⃣ Masukkan Total **Pemasukan QRIS**:\n(Ketik 0 jika tidak ada)` });
+                    await sock.sendMessage(noHp, { text: `✅ Cash: ${formatRupiah(nominal)}\n\n2️⃣ Masukkan Total *Pemasukan QRIS*:\n(Ketik 0 jika tidak ada)` });
                     return;
                 }
                 // 2. QRIS -> TRANSFER
                 if (session.step === 'INPUT_INCOME_QRIS') {
                     session.data.in_qris = nominal;
                     session.step = 'INPUT_INCOME_TRANSFER';
-                    await sock.sendMessage(noHp, { text: `✅ QRIS: ${formatRupiah(nominal)}\n\n3️⃣ Masukkan Total **Pemasukan TRANSFER**:\n(Ketik 0 jika tidak ada)` });
+                    await sock.sendMessage(noHp, { text: `✅ QRIS: ${formatRupiah(nominal)}\n\n3️⃣ Masukkan Total *Pemasukan TRANSFER*:\n(Ketik 0 jika tidak ada)` });
                     return;
                 }
                 // 3. TRANSFER -> CATATAN PEMASUKAN
                 if (session.step === 'INPUT_INCOME_TRANSFER') {
                     session.data.in_tf = nominal;
                     session.step = 'INPUT_CATATAN_INCOME';
-                    await sock.sendMessage(noHp, { text: `✅ Transfer: ${formatRupiah(nominal)}\n\n📝 Ada **Catatan PEMASUKAN**?\n(Misal: "Selisih 500", "Customer Hutang". Ketik '-' jika aman)` });
+                    await sock.sendMessage(noHp, { text: `✅ Transfer: ${formatRupiah(nominal)}\n\n📝 Ada *Catatan PEMASUKAN*?\n(Misal: "Selisih 500", "Customer Hutang". Ketik '-' jika aman)` });
                     return;
                 }
                 // 4. CATATAN INCOME -> EXPENSE
                 if (session.step === 'INPUT_CATATAN_INCOME') {
                     session.data.note_income = pesan;
                     session.step = 'INPUT_EXPENSE';
-                    await sock.sendMessage(noHp, { text: `✅ Catatan Pemasukan Tersimpan.\n\n4️⃣ Masukkan Total **PENGELUARAN** (Expense):\n(Operasional, belanja, dll. Ketik 0 jika nihil)` });
+                    await sock.sendMessage(noHp, { text: `✅ Catatan Pemasukan Tersimpan.\n\n4️⃣ Masukkan Total *PENGELUARAN* (Expense):\n(Operasional, belanja, dll. Ketik 0 jika nihil)` });
                     return;
                 }
                 // 5. EXPENSE -> CATATAN PENGELUARAN
                 if (session.step === 'INPUT_EXPENSE') {
                     session.data.out_expense = nominal;
                     session.step = 'INPUT_CATATAN_EXPENSE';
-                    await sock.sendMessage(noHp, { text: `✅ Expense: ${formatRupiah(nominal)}\n\n📝 Tulis Rincian **Catatan PENGELUARAN**:\n(Misal: "Beli Sabun 50rb, Sampah 20rb". Ketik '-' jika tidak ada)` });
+                    await sock.sendMessage(noHp, { text: `✅ Expense: ${formatRupiah(nominal)}\n\n📝 Tulis Rincian *Catatan PENGELUARAN*:\n(Misal: "Beli Sabun 50rb, Sampah 20rb". Ketik '-' jika tidak ada)` });
                     return;
                 }
 
@@ -371,7 +371,7 @@ async function connectToWhatsApp() {
 Data telah aman di Database Server.`;
                         await sock.sendMessage(noHp, { text: struk });
                     } else {
-                        await sock.sendMessage(noHp, { text: "⚠️ Data tercatat di Chat tapi **GAGAL** masuk Server. Hubungi Admin." });
+                        await sock.sendMessage(noHp, { text: "⚠️ Data tercatat di Chat tapi *GAGAL* masuk Server. Hubungi Admin." });
                     }
 
                     // Reset Session
