@@ -6,7 +6,7 @@ const axios = require('axios');
 
 // ================= CONFIG & DATABASE =================
 const BASE_URL = 'https://maknaflow-staging.onrender.com/api'; // Pastikan URL ini benar
-const SESSION_DIR = 'auth_baileys';
+const SESSION_DIR = 'auth_baileys_v2';
 const usePairingCode = false;
 const nomorBot = '628211019477';
 
