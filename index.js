@@ -78,7 +78,7 @@ const getWaktu = () => {
     };
 };
 
-async function kirimLaporanKeServer(noHp, dataLaporan) {
+async function kirimLaporanKeServer(noHp, dataLaporan, sock) {
     try {
         console.log(`🚀 Mengirim Laporan: ${dataLaporan.cabang} oleh ${dataLaporan.nama}`);
         
@@ -138,8 +138,21 @@ async function kirimLaporanKeServer(noHp, dataLaporan) {
         }
 
         return true;
+
     } catch (error) {
         console.error("❌ Gagal kirim ke Server:", error.response?.data || error.message);
+        
+        // LOGIKA BARU: Cek Kode 409 (Duplikat)
+        if (error.response && error.response.status === 409) {
+            await sock.sendMessage(noHp, { 
+                text: `⚠️ *LAPORAN DITOLAK: DUPLIKAT*\n\nData laporan ini (Nominal & Tanggal) sudah pernah masuk sebelumnya.\n\n_Sistem menolak double-input agar kas tidak selisih._ 🙏` 
+            });
+        } else {
+            // Error Lainnya (Server Mati/Crash)
+            await sock.sendMessage(noHp, { 
+                text: `⚠️ Data tercatat di Chat tapi *GAGAL* masuk Server. Hubungi Admin.` 
+            });
+        }
         return false;
     }
 }
@@ -344,7 +357,7 @@ async function connectToWhatsApp() {
 
                     // --- KIRIM KE SERVER DJANGO ---
                     await sock.sendMessage(noHp, { text: "⏳ Sedang mengirim data ke server..." });
-                    const sukses = await kirimLaporanKeServer(noHp, session.data);
+                    const sukses = await kirimLaporanKeServer(noHp, session.data, sock);
 
                     if (sukses) {
                         const struk = `✅ *LAPORAN CLOSING DITERIMA & TERSIMPAN*
