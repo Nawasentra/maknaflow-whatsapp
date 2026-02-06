@@ -281,6 +281,8 @@ async function connectToWhatsApp() {
                             data: { ...staffData, cabang: cabangFinal } 
                         };
 
+                        delete SESSION_OWNER[noHp];
+
                         await sock.sendMessage(noHp, { 
                             text: `✅ Mode: *${cabangFinal}*\n\n1️⃣ Masukkan Total *Pemasukan CASH*:\n(Ketik 0 jika tidak ada)` 
                         });
