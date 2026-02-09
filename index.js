@@ -96,16 +96,18 @@ async function kirimLaporanKeServer(noHp, dataLaporan, sock) {
         console.log(`🚀 Mengirim Laporan: ${dataLaporan.cabang} oleh ${dataLaporan.nama}`);
         
         // Payload disesuaikan dengan Endpoint InternalWhatsAppIngestion di Django
-        const payload = {
-            phone_number: noHp,           // ID WA (Bisa @s.whatsapp.net atau @lid)
-            branch_id: dataLaporan.cabang, // Nama Cabang (String)
-            type: type,
-            amount: 0,                    // Total Amount (Nanti dihitung per item atau total bersih)
-            note: notes
+        const postData = async (type, amount, catatan) => {
+            await axios.post(`${BASE_URL}/ingestion/internal-wa/`, {
+                phone_number: noHp,           // ID WA (Bisa @s.whatsapp.net atau @lid)
+                branch_id: dataLaporan.cabang, // Nama Cabang (String)
+                type: type,
+                amount: 0,                    // Total Amount (Nanti dihitung per item atau total bersih)
+                note: catatan
             // KITA KIRIM DATA AGREGAT ATAU PER TRANSAKSI?
             // Untuk kesederhanaan saat ini, kita kirim 1 Transaksi "Rekap Closing"
             // Tapi idealnya API menerima array transaksi.
             // SEMENTARA: Kita kirim Total Pemasukan sebagai INCOME dan Pengeluaran sebagai EXPENSE secara terpisah.
+            });
         };
 
         // 1. Kirim Pemasukan CASH
